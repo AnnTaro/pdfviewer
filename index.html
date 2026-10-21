@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="カタログ">
+<meta name="theme-color" content="#0f5c5c">
+<title>カタログ検索</title>
+<style>
+:root{--bg:#e9ecef;--panel:#fff;--ink:#1d2430;--sub:#667085;--line:#d5dae0;--ac:#0f5c5c;--acl:#e0f0ef;--hl:rgba(255,214,0,.55)}
+@media(prefers-color-scheme:dark){:root{--bg:#14181d;--panel:#1d232b;--ink:#e8ecf0;--sub:#9aa5b1;--line:#2f3843;--ac:#5fc4bf;--acl:#21343a;--hl:rgba(255,200,0,.5)}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{display:flex;flex-direction:column;background:var(--bg);color:var(--ink);font:15px/1.5 "Hiragino Sans","Noto Sans JP",system-ui,sans-serif;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+header{display:flex;gap:6px;align-items:center;padding:8px;background:var(--panel);border-bottom:1px solid var(--line)}
+button,select{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:7px 10px;min-height:38px}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--ac);outline-offset:1px}
+#q{flex:1;min-width:0;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 10px;min-height:38px}
+#add{background:var(--ac);color:var(--panel);border-color:var(--ac);white-space:nowrap}
+main{flex:1;display:flex;min-height:0;position:relative}
+aside{width:320px;flex:none;background:var(--panel);border-right:1px solid var(--line);overflow:auto}
+aside.hide{display:none}
+.it{display:flex;align-items:center;gap:8px;padding:11px 12px;border-bottom:1px solid var(--line);cursor:pointer}
+.it.on{background:var(--acl);box-shadow:inset 3px 0 var(--ac)}
+.it .n{flex:1;min-width:0;overflow-wrap:anywhere}
+.it small{color:var(--sub);white-space:nowrap}
+.it .x{min-height:32px;padding:2px 8px;color:var(--sub)}
+.rh{padding:10px 12px;color:var(--sub);font-size:13px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel)}
+.r{padding:10px 12px;border-bottom:1px solid var(--line);cursor:pointer}
+.r b{display:block;font-size:13px;color:var(--ac)}
+.r span{display:block;font-size:14px;overflow-wrap:anywhere}
+.r mark{background:var(--hl);color:inherit;border-radius:2px}
+#view{flex:1;min-width:0;display:flex;flex-direction:column}
+#bar{display:flex;gap:6px;align-items:center;padding:6px 8px;background:var(--panel);border-bottom:1px solid var(--line);font-size:13px;color:var(--sub)}
+#bar .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#bar button{min-height:32px;padding:2px 10px}
+#pages{flex:1;overflow:auto;padding:8px;-webkit-overflow-scrolling:touch}
+.pg{position:relative;margin:0 auto 8px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.pg canvas{display:block;width:100%;height:100%}
+.hl{position:absolute;background:var(--hl);mix-blend-mode:multiply;border-radius:2px;pointer-events:none}
+.empty{margin:20vh auto 0;max-width:22em;text-align:center;color:var(--sub);padding:0 16px}
+#toast{position:fixed;left:50%;bottom:calc(16px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--panel);padding:8px 14px;border-radius:8px;font-size:13px;display:none;z-index:9}
+@media(max-width:700px){aside{position:absolute;inset:0 auto 0 0;width:88%;z-index:5;box-shadow:2px 0 12px rgba(0,0,0,.3)}}
+</style>
+</head>
+<body>
+<header>
+  <button id="tg" aria-label="一覧の表示切り替え">☰</button>
+  <input id="q" type="search" placeholder="部分一致で検索" enterkeyhint="search" autocomplete="off">
+  <select id="sc" aria-label="検索範囲"><option value="all">全ファイル</option><option value="cur">表示中</option></select>
+  <button id="add">PDF追加</button>
+  <input id="fi" type="file" accept="application/pdf" multiple hidden>
+</header>
+<main>
+  <aside id="side"><div id="list"></div><div id="res" hidden></div></aside>
+  <section id="view">
+    <div id="bar"><span class="t" id="ttl">PDF未選択</span><button id="zo" aria-label="縮小">－</button><button id="zi" aria-label="拡大">＋</button></div>
+    <div id="pages"><div class="empty">「PDF追加」からカタログのPDFを選ぶと、ここに一覧が並びます。</div></div>
+  </section>
+</main>
+<div id="toast"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+const ready=Promise.resolve();
+const dbp=new Promise((ok,ng)=>{const r=indexedDB.open('catalog',1);r.onupgradeneeded=()=>r.result.createObjectStore('f',{keyPath:'name'});r.onsuccess=()=>ok(r.result);r.onerror=ng});
+const tx=(m,fn)=>dbp.then(d=>new Promise((ok,ng)=>{const t=d.transaction('f',m);const r=fn(t.objectStore('f'));t.oncomplete=()=>ok(r.result);t.onerror=ng}));
+const norm=s=>s.normalize('NFKC').toLowerCase();
+const mobile=()=>matchMedia('(max-width:700px)').matches;
+let files=[],cur=null,doc=null,zoom=1,hlq='',W=0,H=0,obs=null,tt;
+function toast(m,ms){const t=$('toast');t.textContent=m;t.style.display='block';clearTimeout(tt);if(ms)tt=setTimeout(()=>t.style.display='none',ms)}
+function hideToast(){$('toast').style.display='none'}
+
+async function load(){
+  navigator.storage&&navigator.storage.persist&&navigator.storage.persist();
+  files=await tx('readonly',s=>s.getAll());
+  prep();renderList();
+}
+function prep(){
+  files.sort((a,b)=>a.name.localeCompare(b.name,'ja'));
+  files.forEach(f=>{if(!f.txt)f.txt=f.items.map(p=>norm(p.map(i=>i[0]).join('')))});
+}
+function renderList(){
+  const l=$('list');l.innerHTML='';
+  files.forEach(f=>{
+    const d=document.createElement('div');d.className='it'+(cur===f?' on':'');
+    d.innerHTML='<span class="n"></span><small></small><button class="x" aria-label="削除">✕</button>';
+    d.querySelector('.n').textContent=f.name;d.querySelector('small').textContent=f.n+'p';
+    d.onclick=()=>{openFile(f,1,'');if(mobile())$('side').classList.add('hide')};
+    d.querySelector('.x').onclick=async e=>{e.stopPropagation();if(!confirm('「'+f.name+'」を削除しますか？'))return;await tx('readwrite',s=>s.delete(f.name));files=files.filter(x=>x!==f);if(cur===f){cur=null;doc=null;$('pages').innerHTML='';$('ttl').textContent='PDF未選択'}renderList();search()};
+    l.appendChild(d);
+  });
+}
+
+$('add').onclick=()=>$('fi').click();
+$('fi').onchange=async()=>{
+  await ready;
+  for(const file of [...$('fi').files]){
+    try{
+      const buf=await file.arrayBuffer();
+      const d=await pdfjsLib.getDocument({data:buf.slice(0)}).promise;
+      const items=[];
+      for(let i=1;i<=d.numPages;i++){
+        toast(file.name+' を解析中 '+i+'/'+d.numPages);
+        const p=await d.getPage(i),tc=await p.getTextContent();
+        items.push(tc.items.filter(x=>x.str).map(x=>[x.str,Math.round(x.transform[4]*10)/10,Math.round(x.transform[5]*10)/10,Math.round(x.width*10)/10,Math.round(x.height*10)/10]));
+      }
+      const rec={name:file.name.replace(/\.pdf$/i,''),blob:new Blob([buf],{type:'application/pdf'}),n:d.numPages,items};
+      await tx('readwrite',s=>s.put(rec));
+      if(cur&&cur.name===rec.name){cur=null;doc=null}
+      files=files.filter(x=>x.name!==rec.name);files.push(rec);
+    }catch(e){toast(file.name+' を読み込めませんでした',3000)}
+  }
+  $('fi').value='';prep();renderList();hideToast();toast('追加しました',1500);
+};
+
+async function openFile(f,page,q){
+  await ready;
+  hlq=q;
+  if(cur!==f||!doc){
+    cur=f;$('ttl').textContent=f.name;
+    doc=await pdfjsLib.getDocument({data:await f.blob.arrayBuffer()}).promise;
+    renderList();build(page);
+  }else{setHL();goPage(page)}
+}
+async function build(page){
+  const box=$('pages');box.innerHTML='';
+  if(obs)obs.disconnect();
+  const p1=await doc.getPage(1),v=p1.getViewport({scale:1});
+  W=Math.max(200,(box.clientWidth-16)*zoom);H=W*v.height/v.width;
+  obs=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting)draw(e.target)}),{root:box,rootMargin:'700px 0px'});
+  for(let i=1;i<=doc.numPages;i++){
+    const d=document.createElement('div');d.className='pg';d.dataset.p=i;d.style.width=W+'px';d.style.height=H+'px';
+    box.appendChild(d);obs.observe(d);
+  }
+  goPage(page||1);
+}
+function goPage(p){
+  const d=$('pages').children[p-1];if(!d)return;
+  $('pages').scrollTop=d.offsetTop-$('pages').offsetTop-8;
+}
+async function draw(d){
+  if(d._d)return;d._d=1;
+  const n=+d.dataset.p,pg=await doc.getPage(n),v=pg.getViewport({scale:1}),sc=W/v.width,dpr=Math.min(devicePixelRatio||1,2);
+  const c=document.createElement('canvas');c.width=Math.round(W*dpr);c.height=Math.round(v.height*sc*dpr);
+  await pg.render({canvasContext:c.getContext('2d'),viewport:pg.getViewport({scale:sc*dpr})}).promise;
+  d._sc=sc;d._vh=v.height;d.appendChild(c);mark(d);
+}
+function mark(d){
+  d.querySelectorAll('.hl').forEach(x=>x.remove());
+  if(!hlq||!d._sc||!cur)return;
+  const q=norm(hlq),sc=d._sc;
+  (cur.items[+d.dataset.p-1]||[]).forEach(it=>{
+    const s=norm(it[0]);let k=s.indexOf(q);
+    while(k>=0){
+      const e=document.createElement('div');e.className='hl';
+      e.style.left=(it[1]+it[3]*k/s.length)*sc+'px';
+      e.style.width=Math.max(4,it[3]*q.length/s.length*sc)+'px';
+      e.style.top=(d._vh-it[2]-it[4]*0.85)*sc+'px';
+      e.style.height=it[4]*1.1*sc+'px';
+      d.appendChild(e);k=s.indexOf(q,k+q.length);
+    }
+  });
+}
+function setHL(){[...$('pages').children].forEach(d=>mark(d))}
+
+function search(){
+  const raw=$('q').value.trim(),q=norm(raw),res=$('res'),list=$('list');
+  if(!q){res.hidden=true;list.hidden=false;hlq='';if(doc)setHL();return}
+  const targets=$('sc').value==='cur'&&cur?[cur]:files,hits=[];let total=0;
+  targets.forEach(f=>f.txt.forEach((t,i)=>{
+    const k=t.indexOf(q);if(k<0)return;total++;
+    if(hits.length<300)hits.push({f,p:i+1,k,t});
+  }));
+  list.hidden=true;res.hidden=false;res.innerHTML='';
+  const h=document.createElement('div');h.className='rh';
+  h.textContent=total?('該当 '+total+' ページ'+(total>300?'（先頭300件を表示）':'')):'該当なし';
+  res.appendChild(h);
+  hits.forEach(x=>{
+    const d=document.createElement('div');d.className='r';
+    const a=Math.max(0,x.k-18),b=x.k+q.length+34;
+    d.innerHTML='<b></b><span></span>';
+    d.firstChild.textContent=x.f.name+'  '+x.p+'ページ';
+    const sp=d.lastChild;
+    sp.append((a>0?'…':'')+x.t.slice(a,x.k));
+    const m=document.createElement('mark');m.textContent=x.t.slice(x.k,x.k+q.length);sp.append(m);
+    sp.append(x.t.slice(x.k+q.length,b)+(b<x.t.length?'…':''));
+    d.onclick=()=>{openFile(x.f,x.p,raw);if(mobile())$('side').classList.add('hide')};
+    res.appendChild(d);
+  });
+}
+$('q').addEventListener('input',()=>{clearTimeout(search._t);search._t=setTimeout(search,120)});
+$('sc').onchange=search;
+$('tg').onclick=()=>$('side').classList.toggle('hide');
+function setZoom(z){zoom=Math.min(3,Math.max(.6,z));if(doc){const p=Math.round($('pages').scrollTop/(H+8))+1;build(p)}}
+$('zi').onclick=()=>setZoom(zoom+.25);$('zo').onclick=()=>setZoom(zoom-.25);
+$('pages').addEventListener('scroll',()=>{if(doc&&H)$('ttl').textContent=cur.name+'  '+Math.min(doc.numPages,Math.round($('pages').scrollTop/(H+8))+1)+'/'+doc.numPages},{passive:true});
+load();
+</script>
+</body>
+</html>
