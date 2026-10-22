@@ -7,6 +7,9 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="カタログ">
 <meta name="theme-color" content="#0f5c5c">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icon-192.png">
 <title>カタログ検索</title>
 <style>
 :root{--bg:#e9ecef;--panel:#fff;--ink:#1d2430;--sub:#667085;--line:#d5dae0;--ac:#0f5c5c;--acl:#e0f0ef;--hl:rgba(255,214,0,.55)}
@@ -36,6 +39,8 @@ aside.hide{display:none}
 #bar{display:flex;gap:6px;align-items:center;padding:6px 8px;background:var(--panel);border-bottom:1px solid var(--line);font-size:13px;color:var(--sub)}
 #bar .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #bar button{min-height:32px;padding:2px 10px}
+#hnav{display:flex;gap:6px;align-items:center;white-space:nowrap;color:var(--ink)}
+#hnav[hidden]{display:none}
 #pages{flex:1;overflow:auto;padding:8px;-webkit-overflow-scrolling:touch}
 .pg{position:relative;margin:0 auto 8px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25)}
 .pg canvas{display:block;width:100%;height:100%}
@@ -56,22 +61,21 @@ aside.hide{display:none}
 <main>
   <aside id="side"><div id="list"></div><div id="res" hidden></div></aside>
   <section id="view">
-    <div id="bar"><span class="t" id="ttl">PDF未選択</span><button id="zo" aria-label="縮小">－</button><button id="zi" aria-label="拡大">＋</button></div>
+    <div id="bar"><span class="t" id="ttl">PDF未選択</span><span id="hnav" hidden><span id="hn"></span><button id="hp" aria-label="前の該当箇所">▲</button><button id="hx" aria-label="次の該当箇所">▼</button></span><button id="zo" aria-label="縮小">－</button><button id="zi" aria-label="拡大">＋</button></div>
     <div id="pages"><div class="empty">「PDF追加」からカタログのPDFを選ぶと、ここに一覧が並びます。</div></div>
   </section>
 </main>
 <div id="toast"></div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
+<script src="pdf.min.js"></script>
 <script>
 const $=id=>document.getElementById(id);
-pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+pdfjsLib.GlobalWorkerOptions.workerSrc='pdf.worker.min.js';
 const ready=Promise.resolve();
 const dbp=new Promise((ok,ng)=>{const r=indexedDB.open('catalog',1);r.onupgradeneeded=()=>r.result.createObjectStore('f',{keyPath:'name'});r.onsuccess=()=>ok(r.result);r.onerror=ng});
 const tx=(m,fn)=>dbp.then(d=>new Promise((ok,ng)=>{const t=d.transaction('f',m);const r=fn(t.objectStore('f'));t.oncomplete=()=>ok(r.result);t.onerror=ng}));
 const norm=s=>s.normalize('NFKC').toLowerCase();
 const mobile=()=>matchMedia('(max-width:700px)').matches;
-let files=[],cur=null,doc=null,zoom=1,hlq='',W=0,H=0,obs=null,tt;
+let files=[],cur=null,doc=null,zoom=1,hlq='',W=0,H=0,obs=null,tt,ch=[],ci=-1,sq='';
 function toast(m,ms){const t=$('toast');t.textContent=m;t.style.display='block';clearTimeout(tt);if(ms)tt=setTimeout(()=>t.style.display='none',ms)}
 function hideToast(){$('toast').style.display='none'}
 
@@ -126,6 +130,7 @@ async function openFile(f,page,q){
     doc=await pdfjsLib.getDocument({data:await f.blob.arrayBuffer()}).promise;
     renderList();build(page);
   }else{setHL();goPage(page)}
+  syncHits(page);
 }
 async function build(page){
   const box=$('pages');box.innerHTML='';
@@ -170,13 +175,20 @@ function setHL(){[...$('pages').children].forEach(d=>mark(d))}
 
 function search(){
   const raw=$('q').value.trim(),q=norm(raw),res=$('res'),list=$('list');
-  if(!q){res.hidden=true;list.hidden=false;hlq='';if(doc)setHL();return}
+  sq=raw;
+  if(!q){res.hidden=true;list.hidden=false;hlq='';if(doc)setHL();ch=[];ci=-1;updNav();return}
   const targets=$('sc').value==='cur'&&cur?[cur]:files,hits=[];let total=0;
   targets.forEach(f=>f.txt.forEach((t,i)=>{
     const k=t.indexOf(q);if(k<0)return;total++;
     if(hits.length<300)hits.push({f,p:i+1,k,t});
   }));
   list.hidden=true;res.hidden=false;res.innerHTML='';
+  syncHits(0);
+  if(!cur)$('side').classList.remove('hide');
+  else if($('side').classList.contains('hide')){
+    if(ch.length)jumpHit(0);
+    else toast(total?'このPDFには該当なし（☰で他のファイルの結果を確認）':'該当なし',2500);
+  }
   const h=document.createElement('div');h.className='rh';
   h.textContent=total?('該当 '+total+' ページ'+(total>300?'（先頭300件を表示）':'')):'該当なし';
   res.appendChild(h);
@@ -193,6 +205,12 @@ function search(){
     res.appendChild(d);
   });
 }
+function updNav(){$('hnav').hidden=!cur||!sq;$('hn').textContent=ch.length?(ci<0?'–':ci+1)+'/'+ch.length:'0件'}
+function syncHits(p){const q=norm(sq);ch=[];if(cur&&q)cur.txt.forEach((t,i)=>{if(t.indexOf(q)>=0)ch.push(i+1)});ci=ch.indexOf(p);updNav()}
+function jumpHit(k){const n=ch.length;if(!n)return;ci=((k%n)+n)%n;hlq=sq;setHL();goPage(ch[ci]);updNav()}
+$('hp').onclick=()=>jumpHit(ci<0?ch.length-1:ci-1);
+$('hx').onclick=()=>jumpHit(ci+1);
+$('q').addEventListener('keydown',e=>{if(e.key!=='Enter')return;e.preventDefault();clearTimeout(search._t);if($('q').value.trim()!==sq)search();else jumpHit(ci+1)});
 $('q').addEventListener('input',()=>{clearTimeout(search._t);search._t=setTimeout(search,120)});
 $('sc').onchange=search;
 $('tg').onclick=()=>$('side').classList.toggle('hide');
